@@ -83,22 +83,42 @@ class State:
             log.warning("Could not save state: %s", e)
 
 
+OOS_CONFIRM = int(os.getenv("OOS_CONFIRM", "3"))            # checks in a row before "out of stock" counts
+COOLDOWN_HOURS = float(os.getenv("RESTOCK_COOLDOWN_HOURS", "6"))  # max 1 restock ping per product per 6h
+
+
 def process(store: str, state: State, products: list, button_label: str):
     """products: dicts with id, title, url, price, in_stock, image."""
     first_run = not state.seeded
     wanted = [p for p in products if is_wanted(p["title"])]
+    now = time.time()
     for p in wanted:
         old = state.data.get(p["id"])
         event = None
         if old is None:
             event = "NEW LISTING"
-        elif not old.get("in_stock") and p["in_stock"]:
-            event = "RESTOCK"
-        state.data[p["id"]] = {"title": p["title"], "in_stock": p["in_stock"],
-                               "price": p.get("price")}
-        # On first run stay quiet, except 30th Celebration items already in stock
+            rec = {"in_stock": p["in_stock"], "oos": 0, "last_alert": 0}
+        else:
+            rec = dict(old)
+            rec.setdefault("oos", 0)
+            rec.setdefault("last_alert", 0)
+            if p["in_stock"]:
+                if not old.get("in_stock"):
+                    event = "RESTOCK"
+                rec["in_stock"], rec["oos"] = True, 0
+            else:
+                # Takealot flickers when marketplace sellers swap; only count as
+                # out of stock after several checks in a row
+                rec["oos"] += 1
+                if rec["oos"] >= OOS_CONFIRM:
+                    rec["in_stock"] = False
+        if event == "RESTOCK" and now - rec["last_alert"] < COOLDOWN_HOURS * 3600:
+            event = None
+        rec.update({"title": p["title"], "price": p.get("price")})
         if event and (not first_run or (is_priority(p["title"]) and p["in_stock"])):
             send_alert(store, event, p, [(button_label, p["url"])])
+            rec["last_alert"] = now
+        state.data[p["id"]] = rec
 
     if first_run:
         in_stock = sum(1 for p in wanted if p["in_stock"])
