@@ -68,7 +68,7 @@ class State:
             self.data = json.loads(self.path.read_text())
         except Exception:
             self.data = {}
-        self.seeded = bool(self.data)
+        self.seeded = self.path.exists()
 
     def save(self):
         try:
@@ -90,7 +90,8 @@ def process(store: str, state: State, products: list, button_label: str):
             event = "RESTOCK"
         state.data[p["id"]] = {"title": p["title"], "in_stock": p["in_stock"],
                                "price": p.get("price")}
-        if event and not first_run:
+        # On first run stay quiet, except 30th Celebration items already in stock
+        if event and (not first_run or (is_priority(p["title"]) and p["in_stock"])):
             send_alert(store, event, p, [(button_label, p["url"])])
 
     if first_run:
