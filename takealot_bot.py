@@ -37,11 +37,17 @@ EXCLUDE_RE = re.compile(
     re.I,
 )
 PRIORITY_RE = re.compile(r"30th|\bcelebration\b", re.I)
+# Singles / graded cards are skipped — sealed product only
+SINGLES_TITLE_RE = re.compile(
+    r"\b\d{1,3}/\d{2,3}\b|reverse holo|full art|illustration rare|secret rare|"
+    r"ultra rare|holo rare|hyper rare|\bpsa ?\d|\bcgc ?\d|\bbgs ?\d|graded|slab|"
+    r"single card", re.I)
+SINGLES_META_RE = re.compile(r"single|graded|slab|\bpsa\b|\bcgc\b|\bbgs\b", re.I)
 
 
 def is_wanted(title: str) -> bool:
     return bool(POKEMON_RE.search(title) and TCG_RE.search(title)
-                and not EXCLUDE_RE.search(title))
+                and not EXCLUDE_RE.search(title) and not SINGLES_TITLE_RE.search(title))
 
 
 def is_priority(title: str) -> bool:
