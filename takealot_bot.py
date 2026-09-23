@@ -36,7 +36,7 @@ EXCLUDE_RE = re.compile(
     r"lorcana|plush|nintendo switch|t-shirt|hoodie|costume|lunch ?box",
     re.I,
 )
-PRIORITY_RE = re.compile(r"30th|celebration", re.I)
+PRIORITY_RE = re.compile(r"30th|\bcelebration\b", re.I)
 
 
 def is_wanted(title: str) -> bool:
