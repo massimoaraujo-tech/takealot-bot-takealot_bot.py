@@ -212,9 +212,10 @@ def send_alert(store, event, item):
     if item.get("checkout_url") and item["in_stock"]:
         buttons.insert(0, (item.get("checkout_label") or "Add to cart", item["checkout_url"]))
     payload = {"content": content, "embeds": [embed], "allowed_mentions": allowed}
-    post_webhook(payload, buttons, flags=4096 if lvl == 3 else 0)   # Level 3 = silent
     if lvl == 1 and WEBHOOK_30TH:
-        post_webhook(payload, buttons, url=WEBHOOK_30TH)
+        post_webhook(payload, buttons, url=WEBHOOK_30TH)             # 30th -> #30th-alerts only
+    else:
+        post_webhook(payload, buttons, flags=4096 if lvl == 3 else 0)   # Level 3 = silent
 
 
 def short_error(e):
@@ -394,11 +395,13 @@ def post_report(hot, quarantined):
                 note = rrp_note(it)
                 lines.append(f"• [{it['title'][:90]}]({it['url']}) — {price}"
                              + (f" · {note}" if note else ""))
+        post_long("\n".join(lines), url=WEBHOOK_30TH or None)     # 30th list -> #30th-alerts
+        status = [f"{BOT_EMOJI} **{BOT_NAME}** — still running. {len(hot)} 30th products in stock right now."]
     else:
-        lines = [f"{BOT_EMOJI} **{BOT_NAME}** — 30th Celebration stock check: nothing in stock right now."]
+        status = [f"{BOT_EMOJI} **{BOT_NAME}** — still running. No 30th Celebration stock right now."]
     if quarantined:
-        lines.append("\n🚫 **Quarantined (fix when you have time):** " + ", ".join(quarantined))
-    post_long("\n".join(lines))
+        status.append("🚫 **Quarantined (fix when you have time):** " + ", ".join(quarantined))
+    post_long("\n".join(status))
 
 
 # ---------------- Takealot: the JSON search endpoint takealot.com itself uses ----------------
