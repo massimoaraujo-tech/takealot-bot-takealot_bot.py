@@ -180,42 +180,60 @@ def level_of(item):
 
 def send_alert(store, event, item):
     lvl = level_of(item)
-    fields = [
-        {"name": "Price", "value": fmt_price(item.get("price_value")) if item.get("price_value")
-         else (item.get("price") or "—"), "inline": True},
-        {"name": "Stock", "value": "✅ In stock" if item["in_stock"] else "❌ Out of stock",
-         "inline": True},
-        {"name": "Store", "value": store, "inline": True},
-    ]
-    if item.get("was"):
-        fields.append({"name": "Was", "value": fmt_price(item["was"]), "inline": True})
+    in_stock = item["in_stock"]
+    name = re.sub(r"(?i)^pok[eé]mon tcg:?\s*", "", item["title"]).strip() or item["title"]
+    # headline + colour by what actually happened
+    if event == "TEST ALERT":
+        head, color = "🧪 TEST ALERT — all good", 0x9B59B6
+    elif event == "PRICE DROP":
+        head, color = "📉 PRICE DROP", 0x3498DB
+    elif in_stock:
+        head, color = ("🟢 IN STOCK — GO GO GO" if event == "RESTOCK" else "🟢 NEW & IN STOCK"), 0x2ECC71
+    else:
+        head, color = "🆕 JUST LISTED — not in stock yet", 0xE3350D if lvl == 1 else 0x95A5A6
+    ping = lvl == 1                                 # @everyone only for 30th Celebration
+
+    desc = [f"## {head}"]
+    if lvl == 1:
+        desc.append("🔴 **30th Celebration** · top priority")
+    desc.append(f"🏬 **{store}**")
+
+    price = fmt_price(item.get("price_value")) if item.get("price_value") else (item.get("price") or "Not shown")
+    fields = [{"name": "💵 Price", "value": f"**{price}**", "inline": True},
+              {"name": "📦 Stock", "value": "🟢 In stock" if in_stock else "🔴 Not in stock yet",
+               "inline": True}]
     note = rrp_note(item)
     if note:
-        fields.append({"name": "RRP check", "value": note, "inline": True})
+        fields.append({"name": "🏷️ RRP", "value": note, "inline": True})
+    if item.get("was"):
+        fields.append({"name": "Was", "value": f"~~{fmt_price(item['was'])}~~", "inline": True})
     embed = {
-        "title": item["title"][:256], "url": item["url"], "color": COLOR[lvl],
-        "description": f"**{BADGE[lvl]}**\n{EVENT_ICON.get(event, '')} {event}",
+        "title": name[:256], "url": item["url"], "color": color,
+        "description": "\n".join(desc),
         "fields": fields,
-        "footer": {"text": f"{BOT_EMOJI} {BOT_NAME} • {store}"},
+        "footer": {"text": f"{BOT_EMOJI} {BOT_NAME} · {store}"},
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     if item.get("image"):
-        embed["image" if lvl == 1 else "thumbnail"] = {"url": item["image"]}
-    if lvl == 1:
-        content = f"{mention()} 🔥 **30th Celebration {event}** — {store}"
+        embed["image" if (lvl == 1 or in_stock) else "thumbnail"] = {"url": item["image"]}
+
+    short_head = head.split(" — ")[0]
+    if ping:
+        content = f"{mention()} 🔥 **{name[:60]}** — {short_head} at {store}"
     else:
-        content = f"{EVENT_ICON.get(event, '')} **{event}** — {store}"
-    allowed = {"parse": ["everyone"]}
-    if ROLE_30TH:
-        allowed["roles"] = [ROLE_30TH]
-    buttons = [(f"Open on {store}"[:80], item["url"])]
-    if item.get("checkout_url") and item["in_stock"]:
-        buttons.insert(0, (item.get("checkout_label") or "Add to cart", item["checkout_url"]))
+        content = f"{short_head} · {name[:60]} at {store}"
+    allowed = {"parse": ["everyone"]} if ping else {"parse": []}
+    if ping and ROLE_30TH:
+        allowed = {"parse": [], "roles": [ROLE_30TH]}
+    buttons = [(f"🔗 Open on {store}"[:80], item["url"])]
+    if item.get("checkout_url") and in_stock:
+        buttons.insert(0, (item.get("checkout_label") or "🛒 Add to cart", item["checkout_url"]))
     payload = {"content": content, "embeds": [embed], "allowed_mentions": allowed}
+    quiet = 0 if (ping or in_stock) else 4096       # "listed, not in stock" non-30th = silent
     if lvl == 1 and WEBHOOK_30TH:
-        post_webhook(payload, buttons, url=WEBHOOK_30TH)             # 30th -> #30th-alerts only
+        post_webhook(payload, buttons, flags=quiet, url=WEBHOOK_30TH)   # 30th -> #30th-alerts only
     else:
-        post_webhook(payload, buttons, flags=4096 if lvl == 3 else 0)   # Level 3 = silent
+        post_webhook(payload, buttons, flags=quiet)
 
 
 def short_error(e):
