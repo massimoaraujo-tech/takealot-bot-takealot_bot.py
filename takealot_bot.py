@@ -22,6 +22,7 @@ BOT_NAME, BOT_EMOJI = "Spidey", "🕷️"
 # ---------------- Settings (all optional Railway variables) ----------------
 WEBHOOK = os.getenv("DISCORD_WEBHOOK", "")
 WEBHOOK_30TH = os.getenv("WEBHOOK_30TH", "")        # #30th-alerts channel (Level 1 copies)
+WEBHOOK_PRIVATE = os.getenv("WEBHOOK_PRIVATE", "")  # private 30th channel (key store: 30th never goes to #30th-alerts)
 ROLE_30TH = os.getenv("ROLE_30TH_ID", "")           # @30th role id; blank = @everyone
 PROXY_URL = os.getenv("PROXY_URL", "")
 POLL_SECONDS = int(os.getenv("POLL_SECONDS", "180"))
@@ -230,8 +231,8 @@ def send_alert(store, event, item):
         buttons.insert(0, (item.get("checkout_label") or "🛒 Add to cart", item["checkout_url"]))
     payload = {"content": content, "embeds": [embed], "allowed_mentions": allowed}
     quiet = 0 if (ping or in_stock) else 4096       # "listed, not in stock" non-30th = silent
-    if lvl == 1 and WEBHOOK_30TH:
-        post_webhook(payload, buttons, flags=quiet, url=WEBHOOK_30TH)   # 30th -> #30th-alerts only
+    if lvl == 1 and WEBHOOK_PRIVATE:
+        post_webhook(payload, buttons, flags=quiet, url=WEBHOOK_PRIVATE)   # 30th -> private channel only
     else:
         post_webhook(payload, buttons, flags=quiet)
 
@@ -413,7 +414,7 @@ def post_report(hot, quarantined):
                 note = rrp_note(it)
                 lines.append(f"• [{it['title'][:90]}]({it['url']}) — {price}"
                              + (f" · {note}" if note else ""))
-        post_long("\n".join(lines), url=WEBHOOK_30TH or None)     # 30th list -> #30th-alerts
+        post_long("\n".join(lines), url=WEBHOOK_PRIVATE or None)  # 30th list -> private channel only
         status = [f"{BOT_EMOJI} **{BOT_NAME}** — still running. {len(hot)} 30th products in stock right now."]
     else:
         status = [f"{BOT_EMOJI} **{BOT_NAME}** — still running. No 30th Celebration stock right now."]
