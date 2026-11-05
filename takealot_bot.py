@@ -25,7 +25,7 @@ WEBHOOK_30TH = os.getenv("WEBHOOK_30TH", "")        # #30th-alerts channel (Leve
 WEBHOOK_PRIVATE = os.getenv("WEBHOOK_PRIVATE", "")  # private 30th channel (key store: 30th never goes to #30th-alerts)
 ROLE_30TH = os.getenv("ROLE_30TH_ID", "")           # @30th role id; blank = @everyone
 PROXY_URL = os.getenv("PROXY_URL", "")
-POLL_SECONDS = int(os.getenv("POLL_SECONDS", "180"))
+POLL_SECONDS = int(os.getenv("POLL_SECONDS", "60"))
 WORKERS = int(os.getenv("WORKERS", "8"))            # stores checked at the same time
 REPORT_HOURS = float(os.getenv("REPORT_HOURS", "6"))
 OOS_CONFIRM = int(os.getenv("OOS_CONFIRM", "3"))    # checks in a row before "sold out" counts
@@ -43,12 +43,12 @@ POKEMON_RE = re.compile(r"pok[eé]mon", re.I)
 TCG_RE = re.compile(
     r"tcg|trading card|booster|elite trainer|\betb\b|\btin\b|blister|collection|"
     r"battle deck|premium|bundle|binder|poster|display|sleeved|build (and|&) battle|"
-    r"card game|scarlet|violet|mega evolution", re.I)
+    r"card game|scarlet|violet|mega evolution|ultra[- ]?premium|\bupc\b", re.I)
 EXCLUDE_RE = re.compile(
     r"japan|japanese|\bjp\b|chinese|\bcn\b|korean|\bkr\b|simplified|yu-?gi-?oh|"
     r"magic: the gathering|\bmtg\b|one piece|digimon|dragon ball|lorcana|plush|"
     r"nintendo switch|t-shirt|hoodie|costume|lunch ?box", re.I)
-PRIORITY_RE = re.compile(r"30th|\bcelebration\b", re.I)
+PRIORITY_RE = re.compile(r"30th|\bcelebration\b|ultra[- ]?premium|\bupc\b", re.I)  # UPCs = Level 1 too
 SINGLES_TITLE_RE = re.compile(
     r"\b\d{1,3}/\d{2,3}\b|reverse holo|full art|illustration rare|secret rare|"
     r"ultra rare|holo rare|hyper rare|\bpsa ?\d|\bcgc ?\d|\bbgs ?\d|graded|slab|"
@@ -71,7 +71,7 @@ def is_wanted(item):
 
 # ---------------- RRP check for 30th items ----------------
 def _load_rrp():
-    raw = os.getenv("RRP_30TH", "elite trainer=1299|booster bundle=699|sticker=499|mini tin=299")
+    raw = os.getenv("RRP_30TH", "ultra premium=5000|ultra-premium=5000|upc=5000|elite trainer=1299|booster bundle=699|sticker=499|mini tin=299")
     out = []
     for part in raw.split("|"):
         if "=" in part:
@@ -294,7 +294,8 @@ def handle_item(state, store, item, seeded, now):
                 rec["in_stock"] = False
         if pv:
             rec["price"] = pv
-    if event in ("RESTOCK", "PRICE DROP") and now - rec["last_alert"] < COOLDOWN_HOURS * 3600:
+    if (event in ("RESTOCK", "PRICE DROP") and not is_priority(item["title"])
+            and now - rec["last_alert"] < COOLDOWN_HOURS * 3600):
         event = None
     if event and seeded and (not ONLY_30TH or is_priority(item["title"])):
         send_alert(store, event, item)
@@ -429,8 +430,10 @@ def post_report(hot, quarantined):
 API = os.getenv("TAKEALOT_API", "https://api.takealot.com/rest/v-1-12-0/searches/products")
 QUERIES = [q.strip() for q in os.getenv(
     "TAKEALOT_QUERIES",
-    "pokemon 30th celebration|pokemon tcg|pokemon elite trainer box|pokemon booster",
+    "pokemon ultra premium collection|pokemon upc|pokemon 30th celebration|pokemon tcg|"
+    "pokemon elite trainer box|pokemon booster|pokemon trading card game",
 ).split("|") if q.strip()]
+PAGES = int(os.getenv("TAKEALOT_PAGES", "4"))        # result pages read per search
 HEADERS = {"User-Agent": UA, "Accept": "application/json", "Accept-Language": "en-ZA,en;q=0.9",
            "Origin": "https://www.takealot.com", "Referer": "https://www.takealot.com/"}
 
@@ -461,18 +464,31 @@ def fetch(key, opts):
     found, errors = {}, []
     for q in QUERIES:
         try:
-            r = requests.get(API, params={"qsearch": q}, headers=HEADERS,
-                             proxies=proxies, timeout=30)
-            if r.status_code in (403, 429):
-                raise RuntimeError(f"{r.status_code} — blocked")
-            r.raise_for_status()
-            results = ((r.json().get("sections") or {}).get("products") or {}).get("results") or []
-            for p in (parse(i) for i in results):
-                if p:
-                    found[p["id"]] = p
+            after, seen = None, 0
+            for _ in range(PAGES):
+                params = {"qsearch": q}
+                if after:
+                    params["after"] = after
+                r = requests.get(API, params=params, headers=HEADERS,
+                                 proxies=proxies, timeout=30)
+                if r.status_code in (403, 429):
+                    raise RuntimeError(f"{r.status_code} — blocked")
+                r.raise_for_status()
+                prod = (r.json().get("sections") or {}).get("products") or {}
+                results = prod.get("results") or []
+                for p in (parse(i) for i in results):
+                    if p:
+                        found[p["id"]] = p
+                seen += len(results)
+                nxt = (prod.get("paging") or {}).get("next_is_after")
+                if not results or not nxt or nxt == after:
+                    break
+                after = nxt
+                time.sleep(random.uniform(0.5, 1.2))
+            log.debug("query %r: %d results", q, seen)
         except Exception as e:
             errors.append(e)
-        time.sleep(random.uniform(3, 6))
+        time.sleep(random.uniform(0.8, 1.8))
     if errors and len(errors) == len(QUERIES):
         raise errors[-1]
     return list(found.values())
