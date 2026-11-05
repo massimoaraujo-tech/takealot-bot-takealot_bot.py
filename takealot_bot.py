@@ -297,7 +297,10 @@ def handle_item(state, store, item, seeded, now):
     if (event in ("RESTOCK", "PRICE DROP") and not is_priority(item["title"])
             and now - rec["last_alert"] < COOLDOWN_HOURS * 3600):
         event = None
-    if event and seeded and (not ONLY_30TH or is_priority(item["title"])):
+    hot_first = (not seeded and old is None and item["in_stock"] and is_priority(item["title"]))
+    if hot_first:
+        event = "RESTOCK"                           # fresh start: never stay silent on in-stock UPC/30th
+    if event and (seeded or hot_first) and (not ONLY_30TH or is_priority(item["title"])):
         send_alert(store, event, item)
         rec["last_alert"] = now
     state["products"][item["id"]] = rec
