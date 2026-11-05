@@ -488,7 +488,7 @@ def fetch(key, opts):
                     break
                 after = nxt
                 time.sleep(random.uniform(0.5, 1.2))
-            log.debug("query %r: %d results", q, seen)
+            log.info("query %r: %d results", q, seen)
         except Exception as e:
             errors.append(e)
         time.sleep(random.uniform(0.8, 1.8))
