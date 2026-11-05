@@ -227,7 +227,7 @@ def send_alert(store, event, item):
     if ping and ROLE_30TH:
         allowed = {"parse": [], "roles": [ROLE_30TH]}
     buttons = [(f"🔗 Open on {store}"[:80], item["url"])]
-    if item.get("checkout_url") and in_stock:
+    if item.get("checkout_url") and in_stock and lvl == 1 and WEBHOOK_PRIVATE:   # private channel only
         buttons.insert(0, (item.get("checkout_label") or "🛒 Add to cart", item["checkout_url"]))
     payload = {"content": content, "embeds": [embed], "allowed_mentions": allowed}
     quiet = 0 if (ping or in_stock) else 4096       # "listed, not in stock" non-30th = silent
