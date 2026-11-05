@@ -5,6 +5,7 @@ import logging
 import os
 import random
 import re
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -307,9 +308,14 @@ def handle_item(state, store, item, seeded, now):
 
 
 # ---------------- Main loop ----------------
+STATE_LOCK = threading.RLock()
+
+
 def run(get_stores, fetch, single=False, parallel=True):
     """get_stores() -> [(name, key, opts)];  fetch(key, opts) -> [items]"""
     state = load_state()
+    if HOT_SECONDS > 0:
+        threading.Thread(target=hot_loop, args=(state,), daemon=True).start()
     if os.getenv("TEST_ALERT") == "1":
         send_alert("Test Store", "TEST ALERT", {
             "title": "Pokémon TCG: 30th Celebration Elite Trainer Box (test)",
@@ -345,6 +351,7 @@ def run(get_stores, fetch, single=False, parallel=True):
                 except Exception as e:
                     results[k] = e
 
+        STATE_LOCK.acquire()                         # hot watch thread shares the state
         ok, failed, tracked, in_stock, pri, hot = 0, [], 0, 0, 0, []
         for name, key, opts in active:
             rec, res = state["stores"][key], results.get(key)
@@ -385,6 +392,7 @@ def run(get_stores, fetch, single=False, parallel=True):
             if not seeded:
                 state["seeded"].append(key)
         save_state(state)
+        STATE_LOCK.release()
         log.info("Round done: %d/%d OK, %d tracked", ok, len(active), tracked)
 
         if startup:
@@ -462,32 +470,37 @@ def parse(item):
             "image": imgs[0].replace("{size}", "zoom") if imgs else None, "meta": ""}
 
 
-def fetch(key, opts):
+def _search(q, pages):
     proxies = {"http": PROXY_URL, "https": PROXY_URL} if PROXY_URL else None
+    found, after, seen = {}, None, 0
+    for _ in range(pages):
+        params = {"qsearch": q}
+        if after:
+            params["after"] = after
+        r = requests.get(API, params=params, headers=HEADERS, proxies=proxies, timeout=20)
+        if r.status_code in (403, 429):
+            raise RuntimeError(f"{r.status_code} — blocked")
+        r.raise_for_status()
+        prod = (r.json().get("sections") or {}).get("products") or {}
+        results = prod.get("results") or []
+        for p in (parse(i) for i in results):
+            if p:
+                found[p["id"]] = p
+        seen += len(results)
+        nxt = (prod.get("paging") or {}).get("next_is_after")
+        if not results or not nxt or nxt == after:
+            break
+        after = nxt
+        time.sleep(random.uniform(0.5, 1.2))
+    return found, seen
+
+
+def fetch(key, opts):
     found, errors = {}, []
     for q in QUERIES:
         try:
-            after, seen = None, 0
-            for _ in range(PAGES):
-                params = {"qsearch": q}
-                if after:
-                    params["after"] = after
-                r = requests.get(API, params=params, headers=HEADERS,
-                                 proxies=proxies, timeout=30)
-                if r.status_code in (403, 429):
-                    raise RuntimeError(f"{r.status_code} — blocked")
-                r.raise_for_status()
-                prod = (r.json().get("sections") or {}).get("products") or {}
-                results = prod.get("results") or []
-                for p in (parse(i) for i in results):
-                    if p:
-                        found[p["id"]] = p
-                seen += len(results)
-                nxt = (prod.get("paging") or {}).get("next_is_after")
-                if not results or not nxt or nxt == after:
-                    break
-                after = nxt
-                time.sleep(random.uniform(0.5, 1.2))
+            f, seen = _search(q, PAGES)
+            found.update(f)
             log.info("query %r: %d results", q, seen)
         except Exception as e:
             errors.append(e)
@@ -495,6 +508,41 @@ def fetch(key, opts):
     if errors and len(errors) == len(QUERIES):
         raise errors[-1]
     return list(found.values())
+
+
+# ---------------- Hot watch: UPC / 30th searches every ~10s ----------------
+HOT_SECONDS = float(os.getenv("HOT_SECONDS", "10"))
+HOT_QUERIES = [q.strip() for q in os.getenv(
+    "TAKEALOT_HOT_QUERIES", "pokemon ultra premium collection|pokemon upc|pokemon 30th celebration",
+).split("|") if q.strip()]
+
+
+def hot_loop(state):
+    pause, last_log, checks = 0, time.time(), 0
+    while True:
+        if time.time() >= pause:
+            for q in HOT_QUERIES:
+                try:
+                    found, _ = _search(q, 1)
+                except Exception as e:
+                    if "blocked" in str(e):
+                        pause = time.time() + 300        # Takealot pushing back: rest 5 min
+                        log.warning("hot watch: Takealot blocked (%s), pausing 5 min", e)
+                        break
+                    log.debug("hot watch %r: %s", q, e)
+                    continue
+                with STATE_LOCK:
+                    if "takealot" in state["seeded"]:
+                        now = time.time()
+                        for item in found.values():
+                            if is_wanted(item) and is_priority(item["title"]):
+                                handle_item(state, "Takealot", item, True, now)
+                checks += 1
+                time.sleep(random.uniform(0.5, 1.2))
+        if time.time() - last_log > 600:
+            log.info("Hot watch: %d UPC/30th searches in the last 10 min", checks)
+            last_log, checks = time.time(), 0
+        time.sleep(HOT_SECONDS * random.uniform(0.7, 1.3))
 
 
 if __name__ == "__main__":
