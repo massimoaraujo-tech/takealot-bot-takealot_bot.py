@@ -30,7 +30,7 @@ POLL_SECONDS = int(os.getenv("POLL_SECONDS", "60"))
 WORKERS = int(os.getenv("WORKERS", "8"))            # stores checked at the same time
 REPORT_HOURS = float(os.getenv("REPORT_HOURS", "6"))
 OOS_CONFIRM = int(os.getenv("OOS_CONFIRM", "3"))    # checks in a row before "sold out" counts
-COOLDOWN_HOURS = float(os.getenv("RESTOCK_COOLDOWN_HOURS", "2"))
+COOLDOWN_HOURS = float(os.getenv("RESTOCK_COOLDOWN_HOURS", "0.5"))
 FAIL_LIMIT = int(os.getenv("FAIL_LIMIT", "5"))      # failed checks in a row before quarantine
 RETRY_HOURS = float(os.getenv("RETRY_HOURS", "24")) # how often a quarantined store is retried
 ONLY_30TH = os.getenv("ONLY_30TH", "false").lower() == "true"
@@ -309,6 +309,7 @@ def handle_item(state, store, item, seeded, now):
 
 # ---------------- Main loop ----------------
 STATE_LOCK = threading.RLock()
+COMPLETE = {}                                       # key -> True when every search worked this round
 
 
 def run(get_stores, fetch, single=False, parallel=True):
@@ -379,9 +380,11 @@ def run(get_stores, fetch, single=False, parallel=True):
             rec.update(fails=0, quarantined=False)
             ok += 1
             seeded = key in state["seeded"]
+            seen_ids = set()
             for item in res:
                 if not is_wanted(item):
                     continue
+                seen_ids.add(item["id"])
                 tracked += 1
                 in_stock += item["in_stock"]
                 if is_priority(item["title"]):
@@ -389,6 +392,14 @@ def run(get_stores, fetch, single=False, parallel=True):
                     if item["in_stock"]:
                         hot.append((name, item))
                 handle_item(state, name, item, seeded, now)
+            # Takealot drops sold-out products from search. If every search worked and a
+            # product we had as in stock is gone, count it as sold out so its comeback alerts.
+            if COMPLETE.get(key):
+                for pid, prec in state["products"].items():
+                    if pid not in seen_ids and prec.get("in_stock"):
+                        prec["oos"] = prec.get("oos", 0) + 1
+                        if prec["oos"] >= OOS_CONFIRM:
+                            prec["in_stock"] = False
             if not seeded:
                 state["seeded"].append(key)
         save_state(state)
@@ -444,7 +455,7 @@ QUERIES = [q.strip() for q in os.getenv(
     "pokemon ultra premium collection|pokemon upc|pokemon 30th celebration|pokemon tcg|"
     "pokemon elite trainer box|pokemon booster|pokemon trading card game",
 ).split("|") if q.strip()]
-PAGES = int(os.getenv("TAKEALOT_PAGES", "4"))        # result pages read per search
+PAGES = int(os.getenv("TAKEALOT_PAGES", "10"))        # result pages read per search
 HEADERS = {"User-Agent": UA, "Accept": "application/json", "Accept-Language": "en-ZA,en;q=0.9",
            "Origin": "https://www.takealot.com", "Referer": "https://www.takealot.com/"}
 
@@ -507,6 +518,7 @@ def fetch(key, opts):
         time.sleep(random.uniform(0.8, 1.8))
     if errors and len(errors) == len(QUERIES):
         raise errors[-1]
+    COMPLETE[key] = not errors
     return list(found.values())
 
 
